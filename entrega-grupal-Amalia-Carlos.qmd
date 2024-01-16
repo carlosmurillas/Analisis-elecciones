@@ -1,0 +1,688 @@
+---
+title: "Trabajo Grupal"
+author: "Carlos Murillas y Amalia Lobo"
+format: 
+  revealjs: 
+    theme: moon
+editor: visual
+---
+
+# Importamos archivos
+
+```{r paquetes}
+rm(list = ls()) # Borramos variables de environment
+library(tidyverse)
+```
+
+```{r}
+#| echo: true
+datos_elecciones <- read_csv(file = "./datos/datos_elecciones_brutos.csv")
+cod_mun <- read_csv(file = "./datos/cod_mun.csv")
+encuestas <- read_csv(file = "./datos/historical_surveys.csv")
+siglas <- read_csv(file = "./datos/siglas.csv")
+```
+
+# Tidydata
+
+## Datos Electorales
+
+```{r}
+#| echo: true
+library(glue)
+
+datos_elecciones_tidy<-datos_elecciones |> 
+  pivot_longer(cols =-("tipo_eleccion":"votos_candidaturas"), 
+               names_to = "partido", values_to="voto", values_drop_na = TRUE) |> 
+    mutate(fecha = ymd(glue("{anno}{mes}01")),
+         id_mun = glue("{codigo_ccaa}-{codigo_provincia}-{codigo_municipio}"))
+
+
+
+datos_elecciones_tidy<-datos_elecciones_tidy |> 
+  select (-"tipo_eleccion",-"vuelta", -"codigo_distrito_electoral")
+
+```
+
+## Siglas
+
+```{r}
+#| echo: true
+datos_elecciones_tidy <-
+  datos_elecciones_tidy |>
+  mutate(siglas =
+           case_when(str_detect(partido, "PARTIDO SOCIALISTA OBRERO|PARTIT DELS SOCIALISTES DE CATALUNYA|PARTIDO DOS SOCIALISTAS DE GALICIA") ~ "PSOE",
+                     str_detect(partido, "PARTIDO POPULAR") ~ "PP",
+                     str_detect(partido, "CIUDADANOS|CIUTADANS") ~ "CS",
+                     str_detect(partido, "PODEMOS|UNIDAS PODEMOS|UNIDOS PODEMOS|EN COMÚ PODEM|IZQUIERDA UNIDA-ALTERNATIVA") ~ "UP",
+                     str_detect(partido, "BLOQUE NACIONALISTA GALEGO") ~ "BNG",
+                     str_detect(partido, "VOX") ~ "VOX",
+                     str_detect(partido, "COMPROMIS|COMPROMÍS: BLOC-INICIATIVA-VERDSEQUO|BLOC-INICIATIVA-VERDS-EQUO-COALICIÓ COMPROMÍS") ~ "COMPROMIS",
+                     str_detect(partido, "CONVERGÈNCIA I UNIÓ") ~ "CIU",
+                     str_detect(partido, "ESQUERRA REPUBLICANA DE CATALUNYA") ~ "ERC",
+                     str_detect(partido, "PARTIDO NACIONALISTA VASCO") ~ "PNV",
+                     str_detect(partido, "EUSKAL HERRIA BILDU") ~ "EH-BILDU",
+                     str_detect(partido, "MÁS PAÍS") ~ "MPAIS",
+                     TRUE ~ "OTROS"))
+
+```
+
+## Encuestas
+
+```{r}
+#| echo: true
+encuestas<-encuestas |> 
+   mutate(field_work=field_date_to-field_date_from, .before = date_elec)
+
+
+encuestas<-encuestas |> filter(date_elec>'2018-01-01', size>750,field_work>1, exit_poll==F) |> 
+   select(-"type_survey", -"field_date_to", -"field_date_from")
+
+encuestas_tidy<-encuestas |>   pivot_longer(cols =-("field_work":"turnout"), 
+               names_to = "partido", values_to="estimado", values_drop_na = TRUE)
+
+```
+
+## Colores Partidos
+
+```{r}
+#| echo: true
+colores_partidos <- c("VOX" = "green", "PP" = "blue", "PSOE" = "red", "UP" = "purple", 
+                      "EH-BILDU" = "lightgreen", "PNV" = "darkgreen", "CS" = "darkorange", 
+                      "COMPROMIS" = "orange", "MPAIS" = "pink", "ERC"="yellow","BNG"="lightblue", "CIU"='darkblue')
+
+# Función para aplicar el tema a las gráficas
+tema_partidos <- function() {
+  theme_minimal() +
+  scale_fill_manual(values = colores_partidos) +
+  scale_color_manual(values = colores_partidos)
+}
+```
+
+# Preguntas
+
+# ¿Cómo se reparte el voto de partidos de ámbito nacional (PSOE, PP, VOX, CS, MP, UP - IU) frente a los partidos de corte autonómico o nacionalista?
+
+## Sacamos el Porcentaje para cada grupo
+
+```{r}
+#| echo: true
+votos_ambito <- 
+  datos_elecciones_tidy |> 
+  mutate(Ambito = case_when(
+    siglas %in% c("PSOE", "PP", "VOX", "CS", "MPAIS", "UP") ~ "Nacional",
+    TRUE ~ "Autonomico"
+  ))
+
+votos_totales_partidos <-
+  votos_ambito |> 
+  group_by(partido, Ambito) |> 
+  summarise(votos_totales=sum(voto))
+
+votos_grupo <-
+  votos_totales_partidos |> 
+  group_by(Ambito) |> 
+  summarise(general = sum(votos_totales))
+
+porcentaje_grupo <-
+  votos_grupo |> 
+  mutate(porcentaje = general / sum(general) * 100)
+```
+
+## Porcentaje por grupo
+
+```{r}
+#| echo: true
+#| output-location: slide
+
+porcentaje_grupo |> 
+  ggplot(aes(x = Ambito, y = porcentaje, fill = Ambito)) +
+  geom_col(stat = "identity", position = "dodge", width = 0.7) +
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, 80, by = 5)) +
+  scale_fill_manual(values = c("Autonomico" = "#0f0c73", "Nacional" = "#ff0000")) +
+  labs(x = "Ambito",
+       y = "Porcentaje (%)",
+       title = "Votos según el ámbito",
+       subtitle = "Autonómico y Nacional") +
+  theme_set(theme_minimal())+
+  theme_update(plot.title = element_text(size = 25, face = "bold"))
+
+```
+
+```{r}
+#| echo: true
+porcentaje_grupo
+
+```
+
+# ¿Cuál es el partido ganador en los municipios de más de 100 000 habitantes de censo en cada una de las elecciones?
+
+## Partido ganador
+
+```{r}
+#| echo: true
+ datos_elecciones_tidy |> group_by(fecha, id_mun) |> 
+   filter(censo>100000) |> 
+   slice_max(voto, n=1 ) |> 
+   select(fecha, id_mun, siglas, voto, censo) |> 
+   arrange(desc(censo))
+```
+
+# ¿Qué partido fue el segundo cuando el primero fue el PSOE? ¿Y cuándo el primero fue el PP?
+
+## 
+
+```{r}
+#| echo: true
+votos_por_eleccion <- datos_elecciones_tidy |> 
+  group_by(fecha, siglas) |> 
+  summarize(total_votos = sum(voto, na.rm = TRUE)) |>  
+  ungroup() |> 
+  arrange(fecha, desc(total_votos))
+
+PrimeroYSegundo<-votos_por_eleccion  |> group_by(fecha) |> 
+  slice_max(order_by = total_votos, n = 2) |> 
+  ungroup()
+
+PrimeroYSegundo
+```
+
+## FUNCION
+
+```{r}
+#| echo: true
+FunPrimeroYSegundo <- function(partido_ganador) {
+
+    partidos_ganadores_por_año <- votos_por_eleccion |> 
+    group_by(fecha) |> 
+    arrange(desc(total_votos)) |> 
+    slice(1) |> 
+    ungroup()
+
+    años_ganados_por_partido <- partidos_ganadores_por_año |> 
+    filter(siglas == partido_ganador) |> 
+    pull(fecha)
+
+    segundo_lugar_por_año <- votos_por_eleccion |> 
+    filter(fecha %in% años_ganados_por_partido) |> 
+    group_by(fecha) |> 
+    arrange(desc(total_votos)) |> 
+    slice(2) |> 
+    select(fecha, segundo = siglas) |> 
+    ungroup()
+
+    return(segundo_lugar_por_año)
+}
+
+```
+
+## Output Funcion
+
+```{r}
+#| echo: true
+resultado <- FunPrimeroYSegundo("PSOE")
+resultado
+
+resultado <- FunPrimeroYSegundo("PP")
+resultado
+```
+
+# ¿En qué municipios de más 2000 habitantes de censo, provincias o autonomías la diferencia entre el ganador y el segundo es más elevada?
+
+## Diferencias
+
+```{r}
+#| echo: true
+join_2000 <-
+  datos_elecciones_tidy |> 
+  left_join(cod_mun, by = c("id_mun" = "cod_mun")) |> 
+  filter(censo > 2000)
+
+ganadores <-
+  join_2000 |> 
+  group_by(codigo_ccaa, codigo_provincia, codigo_municipio, municipio, anno) |> 
+  summarize(diferencia = max(voto) - max(voto[voto != max(voto)]))
+  
+diferencias <- 
+  ganadores |> 
+  arrange(desc(diferencia)) |> 
+  slice_head(n = 2)
+
+```
+
+## Diferencias
+
+```{r}
+#| echo: true
+diferencias
+```
+
+# ¿Cuáles son los municipios con mayor porcentaje de votos nulos de España?
+
+## Porcentaje de votos nulos
+
+```{r}
+#| echo: true
+join <-
+  datos_elecciones_tidy |> 
+  left_join(cod_mun, by = c("id_mun" = "cod_mun"))
+join
+
+```
+
+## Porcentaje de votos nulos
+
+```{r}
+#| echo: true
+porcentaje_nulos <-
+  join |> 
+  group_by(municipio) |> 
+  summarise(nulos = sum(votos_nulos)/sum(votos_blancos+ votos_candidaturas + votos_nulos)*100) |> 
+  arrange(desc(nulos))
+
+porcentaje_nulos
+```
+
+# ¿En qué sitios hay mayor participación? ¿Quién ganó en los sitios con mayor participación y donde menos? ¿A quién le beneficia la baja participación?
+
+## 
+
+```{r}
+#| echo: true
+datos_elecciones <- datos_elecciones_tidy |> 
+  mutate(participacion_total = votos_blancos + votos_candidaturas + votos_nulos,
+         tasa_participacion = participacion_total / censo)
+```
+
+```{r}
+#| echo: true
+# Calcular la participación media por municipio
+participacion_por_municipio <- datos_elecciones |> 
+  group_by(id_mun) |> 
+  summarize(tasa_participacion_media = mean(tasa_participacion))
+participacion_por_municipio
+```
+
+## Identificar los municipios con mayor y menor participación
+
+```{r}
+#| echo: true
+municipio_mayor_participacion <- participacion_por_municipio |> 
+  arrange(desc(tasa_participacion_media)) |> 
+  slice(1)
+
+municipio_mayor_participacion <-municipio_mayor_participacion |> inner_join(cod_mun,by = c("id_mun" = "cod_mun"))
+
+ 
+municipio_menor_participacion <- participacion_por_municipio |> 
+  arrange(tasa_participacion_media) |> 
+  slice(1)
+
+municipio_menor_participacion <-municipio_menor_participacion |> inner_join(cod_mun,by = c("id_mun" = "cod_mun"))
+
+```
+
+## 
+
+```{r}
+#| echo: true
+municipio_mayor_participacion
+municipio_menor_participacion 
+```
+
+## Encontrar el partido ganador en los municipios seleccionados
+
+```{r}
+#| echo: true
+
+ganador_max_part <- datos_elecciones |> 
+  filter(id_mun == municipio_mayor_participacion$id_mun) |> 
+  group_by(partido) |> 
+  summarize(total_votos = sum(voto)) |> 
+  arrange(desc(total_votos)) |> 
+  slice(1)
+
+ganador_min_part <- datos_elecciones |> 
+  filter(id_mun == municipio_menor_participacion$id_mun) |> 
+  group_by(partido) |> 
+  summarize(total_votos = sum(voto)) |> 
+  arrange(desc(total_votos)) |> 
+  slice(1)
+
+```
+
+## Partidos Ganadores
+
+```{r}
+#| echo: true
+ganador_max_part
+ganador_min_part
+```
+
+#### La baja participacion favorece a los partidos pequeños y regionalistas
+
+# ¿Cómo analizar la relación entre censo y voto? ¿Es cierto que ciertos partidos ganan lo rural?
+
+## ¿Cómo analizar la relación entre censo y voto? ¿Es cierto que ciertos partidos ganan lo rural?
+
+```{r}
+#| echo: true
+#Primero determino los ganadores teniendo en cuenta los años y los municipios
+mas_votado <-
+  datos_elecciones_tidy |> 
+  group_by(siglas, anno, id_mun) |> 
+  arrange(desc(voto)) |> 
+  slice(1) |> 
+  select(anno, censo, siglas, voto)
+
+```
+
+###### Compruebo como de grande es el intervalo del censo y establezo mi propio intervalo
+
+```{r}
+#| echo: true
+#| output-location: slide
+ggplot(mas_votado, aes(x = censo, y = voto, color = siglas)) +
+  geom_point() +
+  scale_color_manual(values = colores_partidos) +
+  theme_minimal() +
+  labs(title = "Relacion entre el censo y el partido más votado",
+       x = "Censo",
+       y = "Votos") +
+  theme(legend.position = "right")
+```
+
+# ¿Cómo calibrar el error de las encuestas? ¿Cómo visualizarlo? (recuerda que las encuestas son intención de voto a nivel nacional)
+
+## Preparamos el JOIN
+
+```{r}
+#| echo: true
+encuestas_tidy <-  encuestas_tidy |> 
+  mutate(partido = case_when(
+    partido == "EAJ-PNV" ~ "PNV",
+    partido == "IU" ~ "UP",
+    partido == "MP" ~ "MPAIS",
+    TRUE ~ partido 
+  ))
+
+encuestas_Join<-encuestas_tidy |> select('date_elec','partido','estimado','media',"pollster")
+
+```
+
+```{r}
+#| echo: true
+#Poner los votos totales para el porcentaje
+votos_totales<-votos_por_eleccion |> 
+  group_by(fecha) |> 
+  summarize(total_year_votes = sum(total_votos))
+
+votos_porcentaje<-votos_por_eleccion |> 
+  left_join(votos_totales, by = "fecha")|> 
+  mutate(percentage = round((total_votos / total_year_votes) * 100, 1))
+
+votos_reales<-votos_porcentaje |> filter(fecha>"2018-01-01")
+
+votos_Join<-votos_reales |> select(c("fecha","siglas","percentage"))
+
+```
+
+## Hacemos el JOIN
+
+```{r}
+#| echo: true
+# Cambiar los nombres de las columnas para coincidir en ambos dataframes
+encuestas <-encuestas_Join |> rename("fecha"="date_elec","estimado_encuesta"="estimado","siglas"="partido")
+votos <-votos_Join|> rename("porcentaje_real"="percentage")
+
+
+votos$fecha[votos$fecha == "2019-04-01"] <- ymd("2019-04-28")
+votos$fecha[votos$fecha == "2019-11-01"] <- ymd("2019-11-10")
+
+# Unir los dataframes basándose en 'fecha' y 'siglas'
+comparacion <- inner_join(encuestas, votos, by = c("fecha", "siglas"))
+
+comparacion <-comparacion |> mutate(error=porcentaje_real-estimado_encuesta) |> arrange(desc(porcentaje_real))
+```
+
+```{r}
+#| echo: true
+ecm <- comparacion |>  
+  mutate(Error_Cuadratico = (estimado_encuesta - porcentaje_real)^2) |> 
+  summarise(ECM = mean(Error_Cuadratico)) 
+
+error_medio<-mean(comparacion$error) 
+```
+
+## 
+
+```{r}
+#| echo: true
+comparacion
+
+ecm
+
+error_medio
+```
+
+# ¿En qué elección se equivocaron más las encuestas?
+
+## Fecha con mas error
+
+```{r}
+#| echo: true
+
+error_medio_absoluto_por_anno <- comparacion |> 
+  group_by(fecha) |> 
+  summarize(Error_Medio_Absoluto = mean(abs(error), na.rm = TRUE))
+
+# Encontrar el año con el mayor error medio absoluto
+anno_mayor_error_absoluto <- error_medio_absoluto_por_anno |> 
+  filter(Error_Medio_Absoluto == max(Error_Medio_Absoluto))
+# Mostrar el resultado
+anno_mayor_error_absoluto
+error_medio_absoluto_por_anno
+```
+
+# ¿Cómo se equivocaron las encuestas en partidos de ámbito nacional (PSOE, PP, VOX, CS, MP, UP - IU)
+
+## 
+
+```{r}
+#| echo: true
+partidos_nacionales <- c("PSOE", "PP", "VOX", "CS", "MPAIS", "UP")
+
+# Filtrar los datos para estos partidos
+comparacion_partidos_nacionales <- comparacion |> 
+  filter(siglas %in% partidos_nacionales)
+
+```
+
+```{r}
+#| echo: true
+# Calcular el error medio para cada partido nacional
+error_medio_partidos_nacionales <- comparacion_partidos_nacionales |> 
+  group_by(siglas) |> 
+  summarize(Error_Medio = mean(error, na.rm = TRUE))
+
+error_medio_partidos_nacionales_porfecha <- comparacion_partidos_nacionales |> 
+  group_by(siglas,fecha) |> 
+  summarize(Error_Medio = mean(error, na.rm = TRUE))
+
+
+error_medio_partidos_nacionales 
+error_medio_partidos_nacionales_porfecha
+```
+
+## Grafica
+
+```{r}
+#| echo: true
+#| output-location: slide
+
+ggplot(comparacion, aes(x = siglas, y = error, fill = siglas)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = colores_partidos) + # Aplicar los colores definidos
+  geom_hline(yintercept = error_medio) +
+  theme_minimal() +
+  labs(title = "Error Medio por Partido vs Error Medio Global",
+       x = "Partido",
+       y = "Error Medio") 
+```
+
+# ¿Qué casas encuestadores acertaron más y cuales se desviaron más de los resultados?
+
+## Casas encuestadores
+
+```{r}
+#| echo: true
+ error_medio_por_medio_encuestadora<-comparacion |> 
+  group_by(media) |> 
+  summarize(Error_Medio = mean(abs(error), na.rm = TRUE))
+ 
+
+casa_erronea<-error_medio_por_medio_encuestadora |> 
+  filter(Error_Medio == max(Error_Medio))
+ 
+ 
+casa_acertada<-error_medio_por_medio_encuestadora |> 
+  filter(Error_Medio == min(Error_Medio))
+```
+
+## Casas encuestadores
+
+```{r}
+#| echo: true
+casa_erronea
+
+casa_acertada
+
+```
+
+## Grafico La Sexta
+
+```{r}
+#| echo: true
+#| output-location: slide
+comparacion_sexta<-comparacion |> filter(media=="LA SEXTA")
+
+#Grafico de la sexta
+ggplot(comparacion_sexta, aes(x = siglas, y = error, fill = siglas)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Error en los partidos segun La Sexta",
+       x = "Partidos",
+       y = "Error") +
+  scale_fill_manual(values = colores_partidos)
+```
+
+## Grafico EL PERIÓDIC ANDORRA
+
+```{r}
+#| echo: true
+#| output-location: slide
+comparacion_andorra<-comparacion |> filter(media=="EL PERIÓDIC ANDORRA")
+#Grafico de la sexta
+ggplot(comparacion_andorra, aes(x = siglas, y = error, fill = siglas)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Error en los partidos segun EL PERIÓDIC ANDORRA",
+       x = "Partidos",
+       y = "Error") +
+  scale_fill_manual(values = colores_partidos)
+```
+
+# Curiosidades
+
+# ¿Quién ganó en cada comunidad el primer año de registro?
+
+## Elecciones 2008
+
+```{r}
+#| echo: true
+primer_anno <-
+  datos_elecciones_tidy |>
+  filter(anno == 2008)
+
+partido_ganador_comunidad <-
+  primer_anno |>
+  arrange(codigo_ccaa, desc(voto)) |>
+  group_by(codigo_ccaa) |>
+  slice_head(n=1) |>
+  select(anno, codigo_ccaa, siglas, voto)
+
+partido_ganador_comunidad
+
+```
+
+## Grafico
+
+```{r}
+#| echo: true
+#| output-location: slide
+anno_2008 <-
+  partido_ganador_comunidad |>
+  filter(anno == 2008) |>
+  group_by(siglas) |>
+  summarise(total_votos_sigla = sum(voto)) |>
+  mutate(porcentaje_2008 = (total_votos_sigla / sum(total_votos_sigla))*100)
+
+colores_siglas <- c("#EFF30B","#1079C1", "#F3300B")
+
+ggplot(anno_2008, aes(x = "", y = porcentaje_2008, fill = siglas)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+   scale_fill_manual(values = colores_siglas) +
+  coord_polar("y") +
+  ggtitle("Porcentaje de Votos por Siglas") +
+  theme_minimal()
+```
+
+# **¿En qué municipios han ganado los partidos Autonomicos?**
+
+## Dejamos los partidos autonomicos
+
+```{r}
+#| echo: true
+partidos_autonomicos <- c("BNG", "PNV", "ERC", "COMPROMIS", "EH-BILDU")
+
+# Filtramos los datos de los partidos autonomicos
+ganador_auotonomicos <- mas_votado |> 
+  filter(siglas %in% partidos_autonomicos)  
+
+municipios_autonomicos <- left_join(ganador_auotonomicos, cod_mun, by = c("id_mun" = "cod_mun"))
+
+municipios_autonomicos |> select(anno,municipio)
+```
+
+## 
+
+```{r}
+#| echo: true
+Nacionalismos <- ganador_auotonomicos |> 
+  mutate(Grupo = case_when(
+    siglas %in% c("COMPROMIS", "ERC", "CIU") ~ "Catalan",
+    siglas %in% c("PNV", "EH-BILDU") ~ "Vasco",
+    siglas == "BNG" ~ "Gallego",
+    TRUE ~ "Other"
+  ))
+
+Nacionalismos
+```
+
+## Grafico
+
+```{r}
+#| echo: true
+#| output-location: slide
+
+municipalities_count <- Nacionalismos |> 
+  group_by(Grupo) |> 
+  summarise(Count = n_distinct(id_mun))
+
+ggplot(municipalities_count, aes(x = Grupo, y = Count, fill = Grupo)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Numero de Municipios por nacionalismo",
+       x = "Grupo",
+       y = "Nacionalismo")
+```
